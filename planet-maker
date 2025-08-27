@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Organic Party Blobs — Standalone (JSX only, fixed)</title>
+
+    <style>
+      :root { color-scheme: light; }
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #fff; color: #111; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+      .grid { display: grid; gap: 24px; padding: 16px; }
+      @media (min-width: 900px) {
+        .grid { grid-template-columns: 1fr 420px; }
+      }
+      h1 { font-size: 20px; margin: 0 0 8px; }
+      canvas { display: block; border-radius: 16px; box-shadow: 0 2px 10px rgba(0,0,0,.08); border: 1px solid rgba(0,0,0,.1); width: 100%; height: auto; }
+      aside { background: rgba(0,0,0,.04); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
+      label { font-size: 12px; opacity: .8; display:block; margin-bottom:4px; }
+      input[type="number"], select { width: 100%; padding: 6px 8px; border-radius: 8px; border: 1px solid rgba(0,0,0,.15); background: rgba(0,0,0,.04); }
+      input[type="range"] { width: 100%; }
+      button { padding: 8px 12px; border-radius: 12px; border: 1px solid rgba(0,0,0,.15); background: rgba(0,0,0,.06); cursor: pointer; }
+      button:hover { background: rgba(0,0,0,.12); }
+      .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
+      .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .muted { opacity: .7; font-size: 12px; }
+      .flexrow { display:flex; gap:8px; }
+      .cardhead { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    </style>
+
+    <!-- React 18 UMD + ReactDOM (production) -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+    <!-- Babel Standalone to transpile JSX in the browser -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  </head>
+  <body>
+    <div id="root">Caricamento…</div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useRef, useState } = React;
+
+      // RNG seedable (Mulberry32)
+      function mulberry32(a) {
+        return function () {
+          let t = (a += 0x6d2b79f5);
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+      function makeRNG(seed) {
+        const r = mulberry32((seed >>> 0) || 1);
+        const rand01 = () => r();
+        const rand = (a = 0, b = 1) => a + (b - a) * rand01();
+        function gauss() {
+          let u = 0, v = 0;
+          while (u === 0) u = rand01();
+          while (v === 0) v = rand01();
+          return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+        }
+        return { rand01, rand, gauss };
+      }
+      function hash01(seed, id) {
+        const s = (seed ^ ((id >>> 0) * 0x9e3779b1)) >>> 0;
+        return mulberry32(s)();
+      }
+
+      function App() {
+        const W = 1200, H = 600, cx = W / 2, cy = H / 2;
+
+        const canvasRef = useRef(null);
+        const holderRef = useRef(null);
+
+        // Responsive sizing
+        const [viewW, setViewW] = useState(0);
+        const [viewH, setViewH] = useState(0);
+        const [dpr, setDpr] = useState(1);
+        useEffect(() => {
+          function measure() {
+            const el = holderRef.current;
+            const ww = el?.clientWidth ?? 800;
+            const hh = Math.round(ww / 2); // 2:1
+            setViewW(ww);
+            setViewH(hh);
+            setDpr(window.devicePixelRatio || 1);
+          }
+          measure();
+          window.addEventListener("resize", measure);
+          return () => window.removeEventListener("resize", measure);
+        }, []);
+
+        // ---------------- Stato ----------------
+        const [seed, setSeed] = useState(123456);
+        const SYMS = [
+          { v: "none", label: "Nessuna" },
+          { v: "mirrorX", label: "Specchio X" },
+          { v: "mirrorY", label: "Specchio Y" },
+          { v: "quad", label: "Quad (X+Y)" },
+          { v: "central", label: "Centrale (180°)" },
+        ];
+        const [symmetry, setSymmetry] = useState("mirrorX");
+        const [pullX, setPullX] = useState(0);
+        const [pullY, setPullY] = useState(0);
+
+        // Distribuzione punti
+        const [dist, setDist] = useState("uniform");
+        const [nBase, setNBase] = useState(6);
+        const [spacing, setSpacing] = useState(60);
+        const [kClusters, setKClusters] = useState(3);
+        const [spread, setSpread] = useState(120);
+
+        // Raggi (sigma)
+        const [sigmaMin, setSigmaMin] = useState(28);
+        const [sigmaMax, setSigmaMax] = useState(110);
+
+        // Kernel
+        const [kernel, setKernel] = useState("rational");
+        const [alpha, setAlpha] = useState(3.2);
+
+        // Render
+        const [fusion, setFusion] = useState(0.42);
+        const [gridStep, setGridStep] = useState(3);
+        const [debug, setDebug] = useState(true);
+        const [showFill, setShowFill] = useState(true);
+
+        // Anisotropia
+        const [aniso, setAniso] = useState(1.6);
+        const ORIENTS = [
+          { v: "random", label: "Random" },
+          { v: "x", label: "Allineate X" },
+          { v: "y", label: "Allineate Y" },
+          { v: "radial", label: "Radiale (↔ centro)" },
+          { v: "tangential", label: "Tangenziale (⊥ radiale)" },
+          { v: "fixed", label: "Angolo fisso" },
+        ];
+        const [orient, setOrient] = useState("random");
+        const [fixedAngle, setFixedAngle] = useState(0);
+
+        // Branchiness
+        const [branchiness, setBranchiness] = useState(0.55);
+
+        // Lock-IN
+        const [locked, setLocked] = useState(false);
+        const [regenTick, setRegenTick] = useState(0);
+
+        // Helpers
+        const margin = 40;
+        const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+        const toRad = (deg) => (deg * Math.PI) / 180;
+
+        // ---------------- Generazione PUNTI base ----------------
+        function makeBasePoints(R) {
+          const base = [];
+          const target = Math.min(nBase, 10);
+          const maxTries = 8000;
+          let tries = 0;
+
+          function keep(pt, list) {
+            if (spacing <= 0) return true;
+            for (const p of list) if (Math.hypot(pt.x - p.x, pt.y - p.y) < spacing) return false;
+            return true;
+          }
+
+          function sampleRect(x0, x1, y0, y1) {
+            if (dist === "uniform") {
+              while (base.length < target && tries < maxTries) {
+                tries++;
+                const x = R(x0, x1), y = R(y0, y1);
+                const c = { x, y, s: R(sigmaMin, sigmaMax), w: R(0.9, 1.2), id: base.length };
+                if (keep(c, base)) base.push(c);
+              }
+            } else {
+              const hubs = Array.from({ length: kClusters }, () => ({ x: R(x0, x1), y: R(y0, y1) }));
+              while (base.length < target && tries < maxTries) {
+                tries++;
+                const h = hubs[Math.floor(R(0, hubs.length))];
+                const x = clamp(h.x + makeRNG(seed).gauss()() * spread * 0.4, x0, x1);
+                const y = clamp(h.y + makeRNG(seed).gauss()() * spread * 0.4, y0, y1);
+                const c = { x, y, s: R(sigmaMin, sigmaMax), w: R(0.9, 1.2), id: base.length };
+                if (keep(c, base)) base.push(c);
+              }
+            }
+          }
+
+          switch (symmetry) {
+            case "mirrorX":
+            case "central":
+              sampleRect(margin, W / 2 - margin, margin, H - margin);
+              break;
+            case "mirrorY":
+              sampleRect(margin, W - margin, margin, H / 2 - margin);
+              break;
+            case "quad":
+              sampleRect(margin, W / 2 - margin, margin, H / 2 - margin);
+              break;
+            default:
+              sampleRect(margin, W - margin, margin, H - margin);
+              break;
+          }
+
+          // densità locale (per branchiness)
+          const K = Math.min(3, base.length - 1);
+          const dists = base.map(() => []);
+          for (let i = 0; i < base.length; i++)
+            for (let j = i + 1; j < base.length; j++) {
+              const d = Math.hypot(base[i].x - base[j].x, base[i].y - base[j].y);
+              dists[i].push(d);
+              dists[j].push(d);
+            }
+          const ref = Math.max(30, spacing || 60);
+          for (let i = 0; i < base.length; i++) {
+            const arr = dists[i].sort((a, b) => a - b).slice(0, K);
+            const mean = arr.length ? arr.reduce((s, v) => s + v, 0) / arr.length : ref;
+            const dens = clamp((ref - mean) / ref, 0, 1);
+            base[i].dens = dens;
+          }
+
+          return base;
+        }
+
+        // Nota: per stabilità del locking, rigeneriamo solo quando serve
+        const baseDeps = useMemo(
+          () => (locked ? [regenTick] : [symmetry, dist, nBase, spacing, kClusters, spread, sigmaMin, sigmaMax, seed]),
+          [locked, regenTick, symmetry, dist, nBase, spacing, kClusters, spread, sigmaMin, sigmaMax, seed]
+        );
+        const basePoints = useMemo(() => {
+          const R = makeRNG(seed);
+          return makeBasePoints(R.rand);
+        }, baseDeps);
+
+        // ---------------- Replica + ANISO PRIMA della simmetria ----------------
+        const centers = useMemo(() => {
+          const pts0 = basePoints.map((p) => ({ ...p }));
+
+          const sx = 1 - clamp(pullX, 0, 1);
+          const sy = 1 - clamp(pullY, 0, 1);
+          const pullXY = (p) => ({ x: cx + (p.x - cx) * sx, y: cy + (p.y - cy) * sy, s: p.s, w: p.w, id: p.id, dens: p.dens });
+
+          const mirX = (p) => ({ x: 2 * cx - p.x, y: p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+          const mirY = (p) => ({ x: p.x, y: 2 * cy - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+          const rot180 = (p) => ({ x: 2 * cx - p.x, y: 2 * cy - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+
+          const angleForBase = (p) => {
+            switch (orient) {
+              case "x": return 0;
+              case "y": return Math.PI / 2;
+              case "fixed": return toRad(fixedAngle);
+              case "radial": return Math.atan2(p.y - cy, p.x - cx);
+              case "tangential": return Math.atan2(p.y - cy, p.x - cx) + Math.PI / 2;
+              default: return hash01(seed, p.id) * Math.PI * 2;
+            }
+          };
+
+          // 1) pull
+          let prim =
+            symmetry === "quad" || symmetry === "central"
+              ? pts0.map(pullXY)
+              : symmetry === "mirrorX"
+              ? pts0.map((p) => ({ ...p, x: cx + (p.x - cx) * sx }))
+              : symmetry === "mirrorY"
+              ? pts0.map((p) => ({ ...p, y: cy + (p.y - cy) * sy }))
+              : pts0.slice();
+
+          // 2) orientazione (sempre PRIMA della simmetria)
+          for (const p of prim) {
+            const ang = angleForBase(p);
+            p.cos = Math.cos(ang);
+            p.sin = Math.sin(ang);
+          }
+
+          // 3) replica
+          let pts = prim.map((p) => ({ ...p }));
+          switch (symmetry) {
+            case "mirrorX": {
+              const xs = prim.map((p) => {
+                const q = mirX(p);
+                if (q.cos !== undefined) q.cos = -q.cos;
+                return q;
+              });
+              pts = pts.concat(xs);
+              break;
+            }
+            case "mirrorY": {
+              const ys = prim.map((p) => {
+                const q = mirY(p);
+                if (q.sin !== undefined) q.sin = -q.sin;
+                return q;
+              });
+              pts = pts.concat(ys);
+              break;
+            }
+            case "quad": {
+              const xs = prim.map((p) => {
+                const q = mirX(p);
+                if (q.cos !== undefined) q.cos = -q.cos;
+                return q;
+              });
+              const ys = prim.map((p) => {
+                const q = mirY(p);
+                if (q.sin !== undefined) q.sin = -q.sin;
+                return q;
+              });
+              const xys = xs.map((p) => {
+                const q = mirY(p);
+                if (q.sin !== undefined) q.sin = -q.sin;
+                return q;
+              });
+              pts = pts.concat(xs, ys, xys);
+              break;
+            }
+            case "central": {
+              const cs = prim.map((p) => {
+                const q = rot180(p);
+                if (q.cos !== undefined) {
+                  q.cos = -q.cos;
+                  q.sin = -q.sin;
+                }
+                return q;
+              });
+              pts = pts.concat(cs);
+              break;
+            }
+            default: break;
+          }
+
+          // Branchiness
+          const br = clamp(branchiness, 0, 1);
+          const sMin = sigmaMin * 0.6, sMax = sigmaMax * 1.4;
+          for (const p of pts) {
+            const dens = p.dens ?? 0;
+            const scale = 1 + br * (dens * 0.5 - (1 - dens) * 0.2);
+            p.s = clamp(p.s * scale, sMin, sMax);
+          }
+          return pts;
+        }, [basePoints, symmetry, pullX, pullY, orient, fixedAngle, branchiness, sigmaMin, sigmaMax, seed]);
+
+        // ---------------- Campo con anisotropia ----------------
+        function fieldAt(x, y) {
+          let vv = 0;
+          const AR = Math.max(1, aniso);
+          if (kernel === "gauss") {
+            for (const c of centers) {
+              const dx = x - c.x, dy = y - c.y;
+              const u = (c.cos || 0) * dx + (c.sin || 0) * dy;
+              const v = -(c.sin || 0) * dx + (c.cos || 1) * dy;
+              const sMaj = (c.s || 1) * AR, sMin = c.s || 1;
+              const wEff = c.w || 1;
+              const expo = -((u * u) / (2 * sMaj * sMaj) + (v * v) / (2 * sMin * sMin));
+              vv += wEff * Math.exp(expo);
+            }
+          } else {
+            const a = alpha;
+            for (const c of centers) {
+              const dx = x - c.x, dy = y - c.y;
+              const u = (c.cos || 0) * dx + (c.sin || 0) * dy;
+              const v = -(c.sin || 0) * dx + (c.cos || 1) * dy;
+              const sMaj = (c.s || 1) * AR, sMin = c.s || 1;
+              const wEff = c.w || 1;
+              const r2 = (u * u) / (sMaj * sMaj) + (v * v) / (sMin * sMin);
+              vv += wEff * (1 / (1 + Math.pow(r2, a / 2)));
+            }
+          }
+          return vv;
+        }
+
+        // ---------------- Soglia automatica ----------------
+        const threshold = useMemo(() => {
+          const step = Math.max(10, gridStep * 6);
+          let borderMax = -Infinity, innerMax = -Infinity;
+          for (let x = 0; x < W; x += step) borderMax = Math.max(borderMax, fieldAt(x, 0), fieldAt(x, H - 1));
+          for (let y = 0; y < H; y += step) borderMax = Math.max(borderMax, fieldAt(0, y), fieldAt(W - 1, y));
+          for (let y = step; y < H - step; y += step) for (let x = step; x < W - step; x += step) innerMax = Math.max(innerMax, fieldAt(x, y));
+          if (!(innerMax > borderMax)) innerMax = borderMax + 1e-3;
+          const t = Math.max(0.01, Math.min(0.95, fusion));
+          const eps = 1e-6 + 0.001 * (innerMax - borderMax);
+          let thr = Math.max(borderMax + eps, borderMax + t * (innerMax - borderMax));
+          const minGap = Math.max(eps, innerMax * 0.02);
+          thr = Math.min(thr, innerMax - minGap);
+          return thr;
+        }, [centers, kernel, alpha, gridStep, fusion, aniso]);
+
+        // ---------------- Render ----------------
+        useEffect(() => {
+          const cnv = canvasRef.current;
+          if (!cnv) return;
+          const ctx = cnv.getContext("2d");
+          if (!ctx) return;
+
+          const CW = Math.max(2, Math.floor(viewW * dpr));
+          const CH = Math.max(2, Math.floor(viewH * dpr));
+          cnv.width = CW;
+          cnv.height = CH;
+          cnv.style.width = viewW + "px";
+          cnv.style.height = viewH + "px";
+
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, CW, CH);
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, CW, CH);
+
+          if (showFill) {
+            const step = Math.max(2, Math.floor(gridStep));
+            const rW = Math.floor(W / step), rH = Math.floor(H / step);
+            const off = document.createElement("canvas");
+            off.width = rW;
+            off.height = rH;
+            const octx = off.getContext("2d", { willReadFrequently: true });
+            const img = octx.createImageData(rW, rH);
+            const data = img.data;
+            let k = 0;
+            for (let j = 0; j < rH; j++) {
+              const y = j * step + step * 0.5;
+              for (let i = 0; i < rW; i++) {
+                const x = i * step + step * 0.5;
+                const on = fieldAt(x, y) > threshold;
+                const col = on ? 0 : 255;
+                data[k++] = col; data[k++] = col; data[k++] = col; data[k++] = 255;
+              }
+            }
+            octx.putImageData(img, 0, 0);
+            const oldS = ctx.imageSmoothingEnabled;
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(off, 0, 0, rW, rH, 0, 0, CW, CH);
+            ctx.imageSmoothingEnabled = oldS;
+          }
+
+          const sx = CW / W, sy = CH / H;
+          ctx.save();
+          ctx.scale(sx, sy);
+          if (debug || !showFill) {
+            ctx.strokeStyle = "#0009";
+            ctx.lineWidth = 1.25 / Math.max(sx, sy);
+            for (const c of centers) {
+              ctx.beginPath();
+              const sMaj = (c.s || 1) * Math.max(1, aniso);
+              const sMin = c.s || 1;
+              if (ctx.ellipse)
+                ctx.ellipse(c.x, c.y, sMaj, sMin, Math.atan2(c.sin || 0, c.cos || 1), 0, Math.PI * 2);
+              else ctx.arc(c.x, c.y, sMin, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+            ctx.setLineDash([]);
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 1.25 / Math.max(sx, sy);
+            for (const c of centers) {
+              ctx.beginPath();
+              ctx.moveTo(c.x - 6, c.y);
+              ctx.lineTo(c.x + 6, c.y);
+              ctx.moveTo(c.x, c.y - 6);
+              ctx.lineTo(c.x, c.y + 6);
+              ctx.stroke();
+            }
+          }
+          ctx.restore();
+        }, [viewW, viewH, dpr, centers, kernel, alpha, gridStep, threshold, debug, showFill, aniso]);
+
+        function exportPNG() {
+          const cnv = canvasRef.current;
+          if (!cnv) return;
+          if (cnv.toBlob) {
+            cnv.toBlob((blob) => {
+              if (!blob) {
+                const a = document.createElement("a");
+                a.href = cnv.toDataURL("image/png");
+                a.download = `metaballs_${seed}.png`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                return;
+              }
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `metaballs_${seed}.png`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+            }, "image/png");
+          } else {
+            const a = document.createElement("a");
+            a.href = cnv.toDataURL("image/png");
+            a.download = `metaballs_${seed}.png`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+        }
+
+        useEffect(() => {
+          try {
+            if (!(centers.length > 0)) throw new Error("No centers generated");
+            const mid = fieldAt(cx, cy);
+            if (!Number.isFinite(mid)) throw new Error("Field not finite");
+            console.debug("[SelfTest] OK – centers:", centers.length, ", field(cx,cy):", mid.toFixed(4));
+          } catch (e) {
+            console.warn("[SelfTest] Failed:", e);
+          }
+        }, [centers]);
+
+        const showPullX = symmetry === "mirrorX" || symmetry === "quad" || symmetry === "central";
+        const showPullY = symmetry === "mirrorY" || symmetry === "quad" || symmetry === "central";
+
+        return (
+          <div className="grid">
+            <div ref={holderRef}>
+              <h1>Organic Party Blobs — Anteprima (responsive 2:1)</h1>
+              <canvas ref={canvasRef} />
+            </div>
+
+            <aside>
+              <div className="cardhead">
+                <div>
+                  <div style={{fontWeight:600}}>Lock punti base</div>
+                  <div className="muted">Se attivo, i punti non cambiano finché non premi Genera.</div>
+                </div>
+                <input type="checkbox" checked={locked} onChange={(e)=>setLocked(e.target.checked)} />
+              </div>
+
+              <div className="row">
+                <div>
+                  <label>Seed</label>
+                  <input type="number" value={seed} onChange={(e)=>setSeed(parseInt(e.target.value||"0"))} />
+                </div>
+                <button onClick={()=>setSeed(Math.floor(Math.random()*1e9))}>Random</button>
+              </div>
+
+              <div className="flexrow">
+                <button style={{flex:1}} onClick={()=> (locked ? setRegenTick(t=>t+1) : setSeed(s=>s+1))}>Genera</button>
+                <button onClick={()=>setShowFill(v=>!v)}>{showFill ? "Solo centri" : "Mostra riempimento"}</button>
+                <button onClick={exportPNG}>Salva PNG</button>
+              </div>
+
+              <div>
+                <label>Simmetria</label>
+                <select value={symmetry} onChange={(e)=>setSymmetry(e.target.value)}>
+                  {SYMS.map(s=> <option key={s.v} value={s.v}>{s.label}</option>)}
+                </select>
+              </div>
+
+              {showPullX && (<div>
+                <label>Distanza simm. X: {pullX.toFixed(2)}</label>
+                <input type="range" min="0" max="1" step="0.01" value={pullX} onChange={(e)=>setPullX(parseFloat(e.target.value))} />
+              </div>)}
+
+              {showPullY && (<div>
+                <label>Distanza simm. Y: {pullY.toFixed(2)}</label>
+                <input type="range" min="0" max="1" step="0.01" value={pullY} onChange={(e)=>setPullY(parseFloat(e.target.value))} />
+              </div>)}
+
+              <div>
+                <label>Anisotropia (1–3): {aniso.toFixed(2)}</label>
+                <input type="range" min="1" max="3" step="0.01" value={aniso} onChange={(e)=>setAniso(parseFloat(e.target.value))} />
+              </div>
+
+              <div className="two">
+                <div>
+                  <label>Orientamento</label>
+                  <select value={orient} onChange={(e)=>setOrient(e.target.value)}>
+                    {ORIENTS.map(o=> <option key={o.v} value={o.v}>{o.label}</option>)}
+                  </select>
+                </div>
+                {orient === "fixed" && (
+                  <div>
+                    <label>Angolo fisso: {fixedAngle.toFixed(0)}°</label>
+                    <input type="range" min="-180" max="180" step="1" value={fixedAngle} onChange={(e)=>setFixedAngle(parseFloat(e.target.value))} />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label>Distribuzione</label>
+                <select value={dist} onChange={(e)=>setDist(e.target.value)}>
+                  <option value="uniform">Uniforme (distanza minima)</option>
+                  <option value="cluster">Cluster (gruppi)</option>
+                </select>
+              </div>
+
+              {dist === "uniform" ? (
+                <div>
+                  <label>Distanza minima: {spacing}px</label>
+                  <input type="range" min="0" max="180" step="5" value={spacing} onChange={(e)=>setSpacing(parseInt(e.target.value))} />
+                </div>
+              ) : (
+                <div className="two">
+                  <div>
+                    <label>Cluster: {kClusters}</label>
+                    <input type="range" min="1" max="5" step="1" value={kClusters} onChange={(e)=>setKClusters(parseInt(e.target.value))} />
+                  </div>
+                  <div>
+                    <label>Spread: {spread}px</label>
+                    <input type="range" min="10" max="240" step="5" value={spread} onChange={(e)=>setSpread(parseInt(e.target.value))} />
+                  </div>
+                </div>
+              )}
+
+              <div className="two">
+                <div>
+                  <label>Kernel</label>
+                  <select value={kernel} onChange={(e)=>setKernel(e.target.value)}>
+                    <option value="rational">Rational 1/(1+(r/σ)^α)</option>
+                    <option value="gauss">Gaussian</option>
+                  </select>
+                </div>
+                {kernel === "rational" && (
+                  <div>
+                    <label>α: {alpha.toFixed(1)}</label>
+                    <input type="range" min="1" max="6" step="0.1" value={alpha} onChange={(e)=>setAlpha(parseFloat(e.target.value))} />
+                  </div>
+                )}
+              </div>
+
+              <div>
+                <label>Branchiness: {branchiness.toFixed(2)}</label>
+                <input type="range" min="0" max="1" step="0.01" value={branchiness} onChange={(e)=>setBranchiness(parseFloat(e.target.value))} />
+              </div>
+            </aside>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
