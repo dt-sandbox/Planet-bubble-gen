@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Organic Party Blobs — Standalone (JSX only, fixed)</title>
+    <title>Organic Party Blobs — Zoom contenuto + Punti base</title>
 
     <style>
       :root { color-scheme: light; }
@@ -11,9 +11,10 @@
       body { margin: 0; background: #fff; color: #111; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
       .grid { display: grid; gap: 24px; padding: 16px; }
       @media (min-width: 900px) {
-        .grid { grid-template-columns: 1fr 420px; }
+        .grid { grid-template-columns: 1fr 460px; }
       }
       h1 { font-size: 20px; margin: 0 0 8px; }
+      .frame { width: 100%; }
       canvas { display: block; border-radius: 16px; box-shadow: 0 2px 10px rgba(0,0,0,.08); border: 1px solid rgba(0,0,0,.1); width: 100%; height: auto; }
       aside { background: rgba(0,0,0,.04); border-radius: 16px; padding: 16px; display: grid; gap: 12px; }
       label { font-size: 12px; opacity: .8; display:block; margin-bottom:4px; }
@@ -23,8 +24,9 @@
       button:hover { background: rgba(0,0,0,.12); }
       .row { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: end; }
       .two { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+      .three { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
       .muted { opacity: .7; font-size: 12px; }
-      .flexrow { display:flex; gap:8px; }
+      .flexrow { display:flex; gap:8px; flex-wrap:wrap; }
       .cardhead { display:flex; align-items:center; justify-content:space-between; gap:8px; }
     </style>
 
@@ -68,28 +70,46 @@
       }
 
       function App() {
-        const W = 1200, H = 600, cx = W / 2, cy = H / 2;
+        // ----- Dimensione logica e rapporto -----
+        const [logicWidth, setLogicWidth] = useState(1200);
+        const [aspect, setAspect] = useState("2:1"); // 2:1, 16:9, 4:3, 1:1
+        const ratio = useMemo(()=>{
+          switch(aspect){
+            case "16:9": return 9/16;
+            case "4:3":  return 3/4;
+            case "1:1":  return 1;
+            default:     return 1/2; // 2:1
+          }
+        }, [aspect]);
+        const logicHeight = useMemo(()=> Math.round(logicWidth * ratio), [logicWidth, ratio]);
+        const W = logicWidth, H = logicHeight, cx = W/2, cy = H/2;
+
+        // Zoom del CONTENUTO (non CSS): 1 = neutro, >1 zoom-in
+        const [zoomContent, setZoomContent] = useState(1);
+
+        const [keepInside, setKeepInside] = useState(true);
 
         const canvasRef = useRef(null);
         const holderRef = useRef(null);
 
-        // Responsive sizing
+        // Responsive sizing (solo adattamento contenitore, niente zoom CSS)
         const [viewW, setViewW] = useState(0);
         const [viewH, setViewH] = useState(0);
         const [dpr, setDpr] = useState(1);
         useEffect(() => {
           function measure() {
             const el = holderRef.current;
-            const ww = el?.clientWidth ?? 800;
-            const hh = Math.round(ww / 2); // 2:1
-            setViewW(ww);
-            setViewH(hh);
+            const baseW = el?.clientWidth ?? 800;
+            const cssW = Math.max(50, Math.round(baseW));
+            const cssH = Math.max(50, Math.round(cssW * (H/W)));
+            setViewW(cssW);
+            setViewH(cssH);
             setDpr(window.devicePixelRatio || 1);
           }
           measure();
           window.addEventListener("resize", measure);
           return () => window.removeEventListener("resize", measure);
-        }, []);
+        }, [W, H]);
 
         // ---------------- Stato ----------------
         const [seed, setSeed] = useState(123456);
@@ -122,8 +142,17 @@
         // Render
         const [fusion, setFusion] = useState(0.42);
         const [gridStep, setGridStep] = useState(3);
-        const [debug, setDebug] = useState(true);
-        const [showFill, setShowFill] = useState(true);
+
+        // Modalità di visualizzazione
+        const [mode, setMode] = useState("both"); // fill | centers | both
+
+        // Qualità (preset -> gridStep)
+        const [quality, setQuality] = useState("media"); // bozza | media | alta | ultra
+        useEffect(()=>{
+          const map = { bozza: 8, media: 4, alta: 2, ultra: 1 };
+          const newStep = map[quality] ?? 4;
+          setGridStep(newStep);
+        }, [quality]);
 
         // Anisotropia
         const [aniso, setAniso] = useState(1.6);
@@ -146,15 +175,15 @@
         const [regenTick, setRegenTick] = useState(0);
 
         // Helpers
-        const margin = 40;
+        const margin = 20;
         const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
         const toRad = (deg) => (deg * Math.PI) / 180;
 
         // ---------------- Generazione PUNTI base ----------------
         function makeBasePoints(R) {
           const base = [];
-          const target = Math.min(nBase, 10);
-          const maxTries = 8000;
+          const target = Math.min(nBase, 20);
+          const maxTries = 12000;
           let tries = 0;
 
           function keep(pt, list) {
@@ -163,7 +192,15 @@
             return true;
           }
 
+          // padding per tenere gli ellissi dentro il canvas (alla scala 1×)
+          const pad = keepInside ? Math.max(sigmaMax * Math.max(1, aniso), sigmaMin) : 0;
+
           function sampleRect(x0, x1, y0, y1) {
+            x0 = Math.max(x0 + pad, margin);
+            x1 = Math.min(x1 - pad, W - margin);
+            y0 = Math.max(y0 + pad, margin);
+            y1 = Math.min(y1 - pad, H - margin);
+            if (x1 <= x0 || y1 <= y0) return; // troppo piccolo, evita crash
             if (dist === "uniform") {
               while (base.length < target && tries < maxTries) {
                 tries++;
@@ -222,8 +259,8 @@
 
         // Nota: per stabilità del locking, rigeneriamo solo quando serve
         const baseDeps = useMemo(
-          () => (locked ? [regenTick] : [symmetry, dist, nBase, spacing, kClusters, spread, sigmaMin, sigmaMax, seed]),
-          [locked, regenTick, symmetry, dist, nBase, spacing, kClusters, spread, sigmaMin, sigmaMax, seed]
+          () => (locked ? [regenTick, W, H, aniso, sigmaMax] : [W, H, symmetry, dist, nBase, spacing, kClusters, spread, sigmaMin, sigmaMax, seed, aniso, keepInside]),
+          [locked, regenTick, W, H, symmetry, dist, nBase, spacing, kClusters, spread, sigmaMin, sigmaMax, seed, aniso, keepInside]
         );
         const basePoints = useMemo(() => {
           const R = makeRNG(seed);
@@ -236,19 +273,18 @@
 
           const sx = 1 - clamp(pullX, 0, 1);
           const sy = 1 - clamp(pullY, 0, 1);
-          const pullXY = (p) => ({ x: cx + (p.x - cx) * sx, y: cy + (p.y - cy) * sy, s: p.s, w: p.w, id: p.id, dens: p.dens });
 
-          const mirX = (p) => ({ x: 2 * cx - p.x, y: p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
-          const mirY = (p) => ({ x: p.x, y: 2 * cy - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
-          const rot180 = (p) => ({ x: 2 * cx - p.x, y: 2 * cy - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+          const mirX = (p) => ({ x: 2 * (W/2) - p.x, y: p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+          const mirY = (p) => ({ x: p.x, y: 2 * (H/2) - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+          const rot180 = (p) => ({ x: 2 * (W/2) - p.x, y: 2 * (H/2) - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
 
           const angleForBase = (p) => {
             switch (orient) {
               case "x": return 0;
               case "y": return Math.PI / 2;
               case "fixed": return toRad(fixedAngle);
-              case "radial": return Math.atan2(p.y - cy, p.x - cx);
-              case "tangential": return Math.atan2(p.y - cy, p.x - cx) + Math.PI / 2;
+              case "radial": return Math.atan2(p.y - (H/2), p.x - (W/2));
+              case "tangential": return Math.atan2(p.y - (H/2), p.x - (W/2)) + Math.PI / 2;
               default: return hash01(seed, p.id) * Math.PI * 2;
             }
           };
@@ -256,11 +292,11 @@
           // 1) pull
           let prim =
             symmetry === "quad" || symmetry === "central"
-              ? pts0.map(pullXY)
+              ? pts0.map((p)=>({ ...p, x: (W/2) + (p.x - (W/2)) * sx, y: (H/2) + (p.y - (H/2)) * sy }))
               : symmetry === "mirrorX"
-              ? pts0.map((p) => ({ ...p, x: cx + (p.x - cx) * sx }))
+              ? pts0.map((p) => ({ ...p, x: (W/2) + (p.x - (W/2)) * sx }))
               : symmetry === "mirrorY"
-              ? pts0.map((p) => ({ ...p, y: cy + (p.y - cy) * sy }))
+              ? pts0.map((p) => ({ ...p, y: (H/2) + (p.y - (H/2)) * sy }))
               : pts0.slice();
 
           // 2) orientazione (sempre PRIMA della simmetria)
@@ -334,10 +370,10 @@
             p.s = clamp(p.s * scale, sMin, sMax);
           }
           return pts;
-        }, [basePoints, symmetry, pullX, pullY, orient, fixedAngle, branchiness, sigmaMin, sigmaMax, seed]);
+        }, [basePoints, symmetry, pullX, pullY, orient, fixedAngle, branchiness, sigmaMin, sigmaMax, seed, W, H]);
 
         // ---------------- Campo con anisotropia ----------------
-        function fieldAt(x, y) {
+        function fieldAtWorld(x, y) {
           let vv = 0;
           const AR = Math.max(1, aniso);
           if (kernel === "gauss") {
@@ -365,13 +401,20 @@
           return vv;
         }
 
+        // fieldAt su coordinate SCHERMO (applica zoom sul contenuto attorno a cx, cy)
+        function fieldAtScreen(x, y) {
+          const wx = (W/2) + (x - (W/2)) / zoomContent;
+          const wy = (H/2) + (y - (H/2)) / zoomContent;
+          return fieldAtWorld(wx, wy);
+        }
+
         // ---------------- Soglia automatica ----------------
         const threshold = useMemo(() => {
           const step = Math.max(10, gridStep * 6);
           let borderMax = -Infinity, innerMax = -Infinity;
-          for (let x = 0; x < W; x += step) borderMax = Math.max(borderMax, fieldAt(x, 0), fieldAt(x, H - 1));
-          for (let y = 0; y < H; y += step) borderMax = Math.max(borderMax, fieldAt(0, y), fieldAt(W - 1, y));
-          for (let y = step; y < H - step; y += step) for (let x = step; x < W - step; x += step) innerMax = Math.max(innerMax, fieldAt(x, y));
+          for (let x = 0; x < W; x += step) borderMax = Math.max(borderMax, fieldAtScreen(x, 0), fieldAtScreen(x, H - 1));
+          for (let y = 0; y < H; y += step) borderMax = Math.max(borderMax, fieldAtScreen(0, y), fieldAtScreen(W - 1, y));
+          for (let y = step; y < H - step; y += step) for (let x = step; x < W - step; x += step) innerMax = Math.max(innerMax, fieldAtScreen(x, y));
           if (!(innerMax > borderMax)) innerMax = borderMax + 1e-3;
           const t = Math.max(0.01, Math.min(0.95, fusion));
           const eps = 1e-6 + 0.001 * (innerMax - borderMax);
@@ -379,7 +422,7 @@
           const minGap = Math.max(eps, innerMax * 0.02);
           thr = Math.min(thr, innerMax - minGap);
           return thr;
-        }, [centers, kernel, alpha, gridStep, fusion, aniso]);
+        }, [centers, kernel, alpha, gridStep, fusion, aniso, W, H, zoomContent]);
 
         // ---------------- Render ----------------
         useEffect(() => {
@@ -400,8 +443,11 @@
           ctx.fillStyle = "#fff";
           ctx.fillRect(0, 0, CW, CH);
 
+          const showFill = mode !== "centers";
+          const showCenters = mode !== "fill";
+
           if (showFill) {
-            const step = Math.max(2, Math.floor(gridStep));
+            const step = Math.max(1, Math.floor(gridStep));
             const rW = Math.floor(W / step), rH = Math.floor(H / step);
             const off = document.createElement("canvas");
             off.width = rW;
@@ -414,7 +460,7 @@
               const y = j * step + step * 0.5;
               for (let i = 0; i < rW; i++) {
                 const x = i * step + step * 0.5;
-                const on = fieldAt(x, y) > threshold;
+                const on = fieldAtScreen(x, y) > threshold;
                 const col = on ? 0 : 255;
                 data[k++] = col; data[k++] = col; data[k++] = col; data[k++] = 255;
               }
@@ -426,12 +472,18 @@
             ctx.imageSmoothingEnabled = oldS;
           }
 
+          // overlay centers (applichiamo zoom del contenuto sul disegno)
           const sx = CW / W, sy = CH / H;
-          ctx.save();
-          ctx.scale(sx, sy);
-          if (debug || !showFill) {
+          if (showCenters) {
+            ctx.save();
+            ctx.scale(sx, sy);
+            // zoom intorno al centro logico
+            ctx.translate(W/2, H/2);
+            ctx.scale(zoomContent, zoomContent);
+            ctx.translate(-W/2, -H/2);
+
             ctx.strokeStyle = "#0009";
-            ctx.lineWidth = 1.25 / Math.max(sx, sy);
+            ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
             for (const c of centers) {
               ctx.beginPath();
               const sMaj = (c.s || 1) * Math.max(1, aniso);
@@ -441,9 +493,10 @@
               else ctx.arc(c.x, c.y, sMin, 0, Math.PI * 2);
               ctx.stroke();
             }
+            // croci
             ctx.setLineDash([]);
             ctx.strokeStyle = "#000";
-            ctx.lineWidth = 1.25 / Math.max(sx, sy);
+            ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
             for (const c of centers) {
               ctx.beginPath();
               ctx.moveTo(c.x - 6, c.y);
@@ -452,9 +505,9 @@
               ctx.lineTo(c.x, c.y + 6);
               ctx.stroke();
             }
+            ctx.restore();
           }
-          ctx.restore();
-        }, [viewW, viewH, dpr, centers, kernel, alpha, gridStep, threshold, debug, showFill, aniso]);
+        }, [viewW, viewH, dpr, centers, kernel, alpha, gridStep, threshold, aniso, mode, W, H, zoomContent]);
 
         function exportPNG() {
           const cnv = canvasRef.current;
@@ -489,24 +542,25 @@
           }
         }
 
+        // self-test
         useEffect(() => {
           try {
             if (!(centers.length > 0)) throw new Error("No centers generated");
-            const mid = fieldAt(cx, cy);
+            const mid = fieldAtWorld(W/2, H/2);
             if (!Number.isFinite(mid)) throw new Error("Field not finite");
             console.debug("[SelfTest] OK – centers:", centers.length, ", field(cx,cy):", mid.toFixed(4));
           } catch (e) {
             console.warn("[SelfTest] Failed:", e);
           }
-        }, [centers]);
+        }, [centers, W, H]);
 
         const showPullX = symmetry === "mirrorX" || symmetry === "quad" || symmetry === "central";
         const showPullY = symmetry === "mirrorY" || symmetry === "quad" || symmetry === "central";
 
         return (
           <div className="grid">
-            <div ref={holderRef}>
-              <h1>Organic Party Blobs — Anteprima (responsive 2:1)</h1>
+            <div className="frame" ref={holderRef}>
+              <h1>Organic Party Blobs — Anteprima</h1>
               <canvas ref={canvasRef} />
             </div>
 
@@ -529,26 +583,89 @@
 
               <div className="flexrow">
                 <button style={{flex:1}} onClick={()=> (locked ? setRegenTick(t=>t+1) : setSeed(s=>s+1))}>Genera</button>
-                <button onClick={()=>setShowFill(v=>!v)}>{showFill ? "Solo centri" : "Mostra riempimento"}</button>
                 <button onClick={exportPNG}>Salva PNG</button>
               </div>
 
-              <div>
-                <label>Simmetria</label>
-                <select value={symmetry} onChange={(e)=>setSymmetry(e.target.value)}>
-                  {SYMS.map(s=> <option key={s.v} value={s.v}>{s.label}</option>)}
-                </select>
+              <div className="two">
+                <div>
+                  <label>Qualità anteprima</label>
+                  <select value={quality} onChange={(e)=>setQuality(e.target.value)}>
+                    <option value="bozza">Bozza (veloce)</option>
+                    <option value="media">Media</option>
+                    <option value="alta">Alta</option>
+                    <option value="ultra">Ultra (lenta)</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Grid step: {gridStep}px</label>
+                  <input type="range" min="1" max="10" step="1" value={gridStep} onChange={(e)=>setGridStep(parseInt(e.target.value))} />
+                </div>
               </div>
 
-              {showPullX && (<div>
-                <label>Distanza simm. X: {pullX.toFixed(2)}</label>
-                <input type="range" min="0" max="1" step="0.01" value={pullX} onChange={(e)=>setPullX(parseFloat(e.target.value))} />
-              </div>)}
+              <div className="two">
+                <div>
+                  <label>Modalità</label>
+                  <select value={mode} onChange={(e)=>setMode(e.target.value)}>
+                    <option value="fill">Solo riempimenti</option>
+                    <option value="centers">Solo centri</option>
+                    <option value="both">Riempimenti + centri</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Tenere i centri dentro il canvas</label>
+                  <select value={keepInside ? "1" : "0"} onChange={(e)=>setKeepInside(e.target.value==="1")}>
+                    <option value="1">Sì</option>
+                    <option value="0">No</option>
+                  </select>
+                </div>
+              </div>
 
-              {showPullY && (<div>
-                <label>Distanza simm. Y: {pullY.toFixed(2)}</label>
-                <input type="range" min="0" max="1" step="0.01" value={pullY} onChange={(e)=>setPullY(parseFloat(e.target.value))} />
-              </div>)}
+              <div className="three">
+                <div>
+                  <label>Larghezza logica (px)</label>
+                  <input type="number" min="200" step="50" value={logicWidth} onChange={(e)=>setLogicWidth(parseInt(e.target.value||"1200"))} />
+                </div>
+                <div>
+                  <label>Rapporto</label>
+                  <select value={aspect} onChange={(e)=>setAspect(e.target.value)}>
+                    <option value="2:1">2:1</option>
+                    <option value="16:9">16:9</option>
+                    <option value="4:3">4:3</option>
+                    <option value="1:1">1:1</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Zoom contenuto: {zoomContent.toFixed(2)}×</label>
+                  <input type="range" min="0.25" max="3" step="0.01" value={zoomContent} onChange={(e)=>setZoomContent(parseFloat(e.target.value))} />
+                </div>
+              </div>
+
+              <div className="two">
+                <div>
+                  <label>Punti base: {nBase}</label>
+                  <input type="range" min="2" max="20" step="1" value={nBase} onChange={(e)=>setNBase(parseInt(e.target.value))} />
+                </div>
+                <div>
+                  <label>Simmetria</label>
+                  <select value={symmetry} onChange={(e)=>setSymmetry(e.target.value)}>
+                    {SYMS.map(s=> <option key={s.v} value={s.v}>{s.label}</option>)}
+                  </select>
+                </div>
+              </div>
+
+              { (symmetry === "mirrorX" || symmetry === "quad" || symmetry === "central") && (
+                <div>
+                  <label>Distanza simm. X: {pullX.toFixed(2)}</label>
+                  <input type="range" min="0" max="1" step="0.01" value={pullX} onChange={(e)=>setPullX(parseFloat(e.target.value))} />
+                </div>
+              )}
+
+              { (symmetry === "mirrorY" || symmetry === "quad" || symmetry === "central") && (
+                <div>
+                  <label>Distanza simm. Y: {pullY.toFixed(2)}</label>
+                  <input type="range" min="0" max="1" step="0.01" value={pullY} onChange={(e)=>setPullY(parseFloat(e.target.value))} />
+                </div>
+              )}
 
               <div>
                 <label>Anisotropia (1–3): {aniso.toFixed(2)}</label>
