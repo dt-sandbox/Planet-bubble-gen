@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Organic Party Blobs — Zoom contenuto + Punti base + Export DPI</title>
+    <title>Organic Party Blobs — DPI export fix (centers-only)</title>
 
     <style>
       :root { color-scheme: light; }
@@ -42,7 +42,7 @@
   <body>
     <div id="root">Caricamento…</div>
 
-    <script type="text/babel">
+    <script type="text/babel" data-presets="react">
       const { useEffect, useMemo, useRef, useState } = React;
 
       // RNG seedable (Mulberry32)
@@ -84,7 +84,7 @@
           }
         }, [aspect]);
         const logicHeight = useMemo(()=> Math.round(logicWidth * ratio), [logicWidth, ratio]);
-        const W = logicWidth, H = logicHeight, cx = W/2, cy = H/2;
+        const W = logicWidth, H = logicHeight;
 
         // Zoom del CONTENUTO (non CSS)
         const [zoomContent, setZoomContent] = useState(1);
@@ -487,7 +487,6 @@
           if (showCenters) {
             ctx.save();
             ctx.scale(sx, sy);
-            // zoom intorno al centro logico
             ctx.translate(W/2, H/2);
             ctx.scale(zoomContent, zoomContent);
             ctx.translate(-W/2, -H/2);
@@ -503,7 +502,6 @@
               else ctx.arc(c.x, c.y, sMin, 0, Math.PI * 2);
               ctx.stroke();
             }
-            // croci
             ctx.setLineDash([]);
             ctx.strokeStyle = "#000";
             ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
@@ -520,7 +518,8 @@
         }, [viewW, viewH, dpr, centers, kernel, alpha, gridStep, threshold, aniso, mode, W, H, zoomContent]);
 
         // ---------------- Render su CANVAS target (per export) ----------------
-        function renderToCanvas(targetCanvas, scale, includeCenters) {
+        // includeFill: se true disegna i riempimenti; includeCenters: se true disegna anche i centri
+        function renderToCanvas(targetCanvas, scale, includeFill, includeCenters) {
           const CW = Math.max(2, Math.floor(W * scale));
           const CH = Math.max(2, Math.floor(H * scale));
 
@@ -533,38 +532,38 @@
           ctx.fillStyle = "#fff";
           ctx.fillRect(0, 0, CW, CH);
 
-          // Riempimenti (bitmap a risoluzione logica e poi scalata)
-          const step = Math.max(1, Math.floor(gridStep));
-          const rW = Math.floor(W / step), rH = Math.floor(H / step);
-          const off = document.createElement("canvas");
-          off.width = rW;
-          off.height = rH;
-          const octx = off.getContext("2d", { willReadFrequently: true });
-          const img = octx.createImageData(rW, rH);
-          const data = img.data;
-          let k = 0;
-          for (let j = 0; j < rH; j++) {
-            const y = j * step + step * 0.5;
-            for (let i = 0; i < rW; i++) {
-              const x = i * step + step * 0.5;
-              const on = fieldAtScreen(x, y) > threshold;
-              const col = on ? 0 : 255;
-              data[k++] = col; data[k++] = col; data[k++] = col; data[k++] = 255;
+          if (includeFill) {
+            // Riempimenti (bitmap a risoluzione logica e poi scalata)
+            const step = Math.max(1, Math.floor(gridStep));
+            const rW = Math.floor(W / step), rH = Math.floor(H / step);
+            const off = document.createElement("canvas");
+            off.width = rW;
+            off.height = rH;
+            const octx = off.getContext("2d", { willReadFrequently: true });
+            const img = octx.createImageData(rW, rH);
+            const data = img.data;
+            let k = 0;
+            for (let j = 0; j < rH; j++) {
+              const y = j * step + step * 0.5;
+              for (let i = 0; i < rW; i++) {
+                const x = i * step + step * 0.5;
+                const on = fieldAtScreen(x, y) > threshold;
+                const col = on ? 0 : 255;
+                data[k++] = col; data[k++] = col; data[k++] = col; data[k++] = 255;
+              }
             }
+            octx.putImageData(img, 0, 0);
+            const oldS = ctx.imageSmoothingEnabled;
+            ctx.imageSmoothingEnabled = false;
+            ctx.drawImage(off, 0, 0, rW, rH, 0, 0, CW, CH);
+            ctx.imageSmoothingEnabled = oldS;
           }
-          octx.putImageData(img, 0, 0);
-          const oldS = ctx.imageSmoothingEnabled;
-          ctx.imageSmoothingEnabled = false;
-          ctx.drawImage(off, 0, 0, rW, rH, 0, 0, CW, CH);
-          ctx.imageSmoothingEnabled = oldS;
 
           if (includeCenters) {
             // overlay centers in alta risoluzione
             ctx.save();
-            // scala al canvas finale
             const sx = CW / W, sy = CH / H;
             ctx.scale(sx, sy);
-            // zoom intorno al centro logico
             ctx.translate(W/2, H/2);
             ctx.scale(zoomContent, zoomContent);
             ctx.translate(-W/2, -H/2);
@@ -580,7 +579,6 @@
               else ctx.arc(c.x, c.y, sMin, 0, Math.PI * 2);
               ctx.stroke();
             }
-            // croci
             ctx.setLineDash([]);
             ctx.strokeStyle = "#000";
             ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
@@ -596,14 +594,17 @@
           }
         }
 
-        // ---------------- EXPORT PNG (con scala DPI) ----------------
+        // ---------------- EXPORT PNG (rispetta il mode) ----------------
         function exportPNG() {
+          // Selezione in base alla modalità
+          const includeFill = (mode !== "centers");
           const includeCenters = (mode !== "fill");
+
           const scale = exportScale; // DPI / 96
           const tmp = document.createElement("canvas");
 
           // Render “full-res” sul canvas off-screen
-          renderToCanvas(tmp, scale, includeCenters);
+          renderToCanvas(tmp, scale, includeFill, includeCenters);
 
           // Salva
           if (tmp.toBlob) {
@@ -647,9 +648,6 @@
             console.warn("[SelfTest] Failed:", e);
           }
         }, [centers, W, H]);
-
-        const showPullX = symmetry === "mirrorX" || symmetry === "quad" || symmetry === "central";
-        const showPullY = symmetry === "mirrorY" || symmetry === "quad" || symmetry === "central";
 
         return (
           <div className="grid">
@@ -828,7 +826,7 @@
                 <input type="range" min="0" max="1" step="0.01" value={branchiness} onChange={(e)=>setBranchiness(parseFloat(e.target.value))} />
               </div>
 
-              <hr style="border:none;border-top:1px solid rgba(0,0,0,.12);margin:8px 0 0" />
+              <hr style={{ border: 'none', borderTop: '1px solid rgba(0,0,0,.12)', margin: '8px 0 0' }} />
               <div className="two">
                 <div>
                   <label>DPI esportazione</label>
@@ -855,4 +853,3 @@
     </script>
   </body>
 </html>
-
