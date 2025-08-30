@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Organic Party Blobs — Zoom contenuto + Punti base</title>
+    <title>Organic Party Blobs — Zoom contenuto + Punti base + Export DPI</title>
 
     <style>
       :root { color-scheme: light; }
@@ -28,6 +28,8 @@
       .muted { opacity: .7; font-size: 12px; }
       .flexrow { display:flex; gap:8px; flex-wrap:wrap; }
       .cardhead { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+      .help { font-size: 12px; opacity: .75; }
+      .pill { font-size: 11px; padding: 2px 6px; border-radius: 99px; border: 1px solid rgba(0,0,0,.15); background: rgba(0,0,0,.04); display:inline-block; }
     </style>
 
     <!-- React 18 UMD + ReactDOM (production) -->
@@ -84,7 +86,7 @@
         const logicHeight = useMemo(()=> Math.round(logicWidth * ratio), [logicWidth, ratio]);
         const W = logicWidth, H = logicHeight, cx = W/2, cy = H/2;
 
-        // Zoom del CONTENUTO (non CSS): 1 = neutro, >1 zoom-in
+        // Zoom del CONTENUTO (non CSS)
         const [zoomContent, setZoomContent] = useState(1);
 
         const [keepInside, setKeepInside] = useState(true);
@@ -146,7 +148,7 @@
         // Modalità di visualizzazione
         const [mode, setMode] = useState("both"); // fill | centers | both
 
-        // Qualità (preset -> gridStep)
+        // Qualità anteprima (preset -> gridStep)
         const [quality, setQuality] = useState("media"); // bozza | media | alta | ultra
         useEffect(()=>{
           const map = { bozza: 8, media: 4, alta: 2, ultra: 1 };
@@ -173,6 +175,14 @@
         // Lock-IN
         const [locked, setLocked] = useState(false);
         const [regenTick, setRegenTick] = useState(0);
+
+        // ----- DPI di esportazione -----
+        const [exportDPI, setExportDPI] = useState(300); // 72, 150, 300, 600
+        const exportScale = useMemo(()=> (exportDPI / 96), [exportDPI]); // canvas base ≈ 96 DPI
+        const exportSize = useMemo(()=> ({
+          w: Math.round(W * exportScale),
+          h: Math.round(H * exportScale)
+        }), [W, H, exportScale]);
 
         // Helpers
         const margin = 20;
@@ -424,7 +434,7 @@
           return thr;
         }, [centers, kernel, alpha, gridStep, fusion, aniso, W, H, zoomContent]);
 
-        // ---------------- Render ----------------
+        // ---------------- Render ANTEPRIMA ----------------
         useEffect(() => {
           const cnv = canvasRef.current;
           if (!cnv) return;
@@ -509,15 +519,99 @@
           }
         }, [viewW, viewH, dpr, centers, kernel, alpha, gridStep, threshold, aniso, mode, W, H, zoomContent]);
 
+        // ---------------- Render su CANVAS target (per export) ----------------
+        function renderToCanvas(targetCanvas, scale, includeCenters) {
+          const CW = Math.max(2, Math.floor(W * scale));
+          const CH = Math.max(2, Math.floor(H * scale));
+
+          targetCanvas.width = CW;
+          targetCanvas.height = CH;
+
+          const ctx = targetCanvas.getContext("2d");
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, CW, CH);
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, CW, CH);
+
+          // Riempimenti (bitmap a risoluzione logica e poi scalata)
+          const step = Math.max(1, Math.floor(gridStep));
+          const rW = Math.floor(W / step), rH = Math.floor(H / step);
+          const off = document.createElement("canvas");
+          off.width = rW;
+          off.height = rH;
+          const octx = off.getContext("2d", { willReadFrequently: true });
+          const img = octx.createImageData(rW, rH);
+          const data = img.data;
+          let k = 0;
+          for (let j = 0; j < rH; j++) {
+            const y = j * step + step * 0.5;
+            for (let i = 0; i < rW; i++) {
+              const x = i * step + step * 0.5;
+              const on = fieldAtScreen(x, y) > threshold;
+              const col = on ? 0 : 255;
+              data[k++] = col; data[k++] = col; data[k++] = col; data[k++] = 255;
+            }
+          }
+          octx.putImageData(img, 0, 0);
+          const oldS = ctx.imageSmoothingEnabled;
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(off, 0, 0, rW, rH, 0, 0, CW, CH);
+          ctx.imageSmoothingEnabled = oldS;
+
+          if (includeCenters) {
+            // overlay centers in alta risoluzione
+            ctx.save();
+            // scala al canvas finale
+            const sx = CW / W, sy = CH / H;
+            ctx.scale(sx, sy);
+            // zoom intorno al centro logico
+            ctx.translate(W/2, H/2);
+            ctx.scale(zoomContent, zoomContent);
+            ctx.translate(-W/2, -H/2);
+
+            ctx.strokeStyle = "#0009";
+            ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
+            for (const c of centers) {
+              ctx.beginPath();
+              const sMaj = (c.s || 1) * Math.max(1, aniso);
+              const sMin = c.s || 1;
+              if (ctx.ellipse)
+                ctx.ellipse(c.x, c.y, sMaj, sMin, Math.atan2(c.sin || 0, c.cos || 1), 0, Math.PI * 2);
+              else ctx.arc(c.x, c.y, sMin, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+            // croci
+            ctx.setLineDash([]);
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
+            for (const c of centers) {
+              ctx.beginPath();
+              ctx.moveTo(c.x - 6, c.y);
+              ctx.lineTo(c.x + 6, c.y);
+              ctx.moveTo(c.x, c.y - 6);
+              ctx.lineTo(c.x, c.y + 6);
+              ctx.stroke();
+            }
+            ctx.restore();
+          }
+        }
+
+        // ---------------- EXPORT PNG (con scala DPI) ----------------
         function exportPNG() {
-          const cnv = canvasRef.current;
-          if (!cnv) return;
-          if (cnv.toBlob) {
-            cnv.toBlob((blob) => {
+          const includeCenters = (mode !== "fill");
+          const scale = exportScale; // DPI / 96
+          const tmp = document.createElement("canvas");
+
+          // Render “full-res” sul canvas off-screen
+          renderToCanvas(tmp, scale, includeCenters);
+
+          // Salva
+          if (tmp.toBlob) {
+            tmp.toBlob((blob) => {
               if (!blob) {
                 const a = document.createElement("a");
-                a.href = cnv.toDataURL("image/png");
-                a.download = `metaballs_${seed}.png`;
+                a.href = tmp.toDataURL("image/png");
+                a.download = `metaballs_${seed}_${exportDPI}dpi.png`;
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
@@ -526,7 +620,7 @@
               const url = URL.createObjectURL(blob);
               const a = document.createElement("a");
               a.href = url;
-              a.download = `metaballs_${seed}.png`;
+              a.download = `metaballs_${seed}_${exportDPI}dpi.png`;
               document.body.appendChild(a);
               a.click();
               a.remove();
@@ -534,8 +628,8 @@
             }, "image/png");
           } else {
             const a = document.createElement("a");
-            a.href = cnv.toDataURL("image/png");
-            a.download = `metaballs_${seed}.png`;
+            a.href = tmp.toDataURL("image/png");
+            a.download = `metaballs_${seed}_${exportDPI}dpi.png`;
             document.body.appendChild(a);
             a.click();
             a.remove();
@@ -733,6 +827,24 @@
                 <label>Branchiness: {branchiness.toFixed(2)}</label>
                 <input type="range" min="0" max="1" step="0.01" value={branchiness} onChange={(e)=>setBranchiness(parseFloat(e.target.value))} />
               </div>
+
+              <hr style="border:none;border-top:1px solid rgba(0,0,0,.12);margin:8px 0 0" />
+              <div className="two">
+                <div>
+                  <label>DPI esportazione</label>
+                  <select value={exportDPI} onChange={(e)=>setExportDPI(parseInt(e.target.value)||300)}>
+                    <option value="72">72</option>
+                    <option value="150">150</option>
+                    <option value="300">300</option>
+                    <option value="600">600</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Output px (DPI):</label>
+                  <div className="pill">{exportSize.w} × {exportSize.h}px</div>
+                  <div className="help">scala = DPI / 96</div>
+                </div>
+              </div>
             </aside>
           </div>
         );
@@ -743,3 +855,4 @@
     </script>
   </body>
 </html>
+
