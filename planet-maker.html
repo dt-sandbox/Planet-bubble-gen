@@ -3,14 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Organic Party Blobs — DPI export fix (centers-only)</title>
+    <title>Organic Party Blobs — Preset + DPI + SVG export</title>
 
     <style>
       :root { color-scheme: light; }
       * { box-sizing: border-box; }
       body { margin: 0; background: #fff; color: #111; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
       .grid { display: grid; gap: 24px; padding: 16px; }
-      @media (min-width: 900px) {
+      @media (min-width: 980px) {
         .grid { grid-template-columns: 1fr 460px; }
       }
       h1 { font-size: 20px; margin: 0 0 8px; }
@@ -30,6 +30,9 @@
       .cardhead { display:flex; align-items:center; justify-content:space-between; gap:8px; }
       .help { font-size: 12px; opacity: .75; }
       .pill { font-size: 11px; padding: 2px 6px; border-radius: 99px; border: 1px solid rgba(0,0,0,.15); background: rgba(0,0,0,.04); display:inline-block; }
+      .toolbar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+      .exportbar { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+      .small { font-size: 12px; }
     </style>
 
     <!-- React 18 UMD + ReactDOM (production) -->
@@ -44,6 +47,10 @@
 
     <script type="text/babel" data-presets="react">
       const { useEffect, useMemo, useRef, useState } = React;
+
+      // Helpers
+      const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+      const toRad = (deg) => (deg * Math.PI) / 180;
 
       // RNG seedable (Mulberry32)
       function mulberry32(a) {
@@ -84,7 +91,7 @@
           }
         }, [aspect]);
         const logicHeight = useMemo(()=> Math.round(logicWidth * ratio), [logicWidth, ratio]);
-        const W = logicWidth, H = logicHeight;
+        const W = logicWidth, H = logicHeight, cx = W/2, cy = H/2;
 
         // Zoom del CONTENUTO (non CSS)
         const [zoomContent, setZoomContent] = useState(1);
@@ -123,7 +130,9 @@
           { v: "central", label: "Centrale (180°)" },
         ];
         const [symmetry, setSymmetry] = useState("mirrorX");
-        const [pullX, setPullX] = useState(0);
+
+        // Pull centrato: -1..1 (0 = centrale)
+        const [pullX, setPullX] = useState(0); // < 0 allontana dai piani di simmetria, > 0 avvicina
         const [pullY, setPullY] = useState(0);
 
         // Distribuzione punti
@@ -186,8 +195,6 @@
 
         // Helpers
         const margin = 20;
-        const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-        const toRad = (deg) => (deg * Math.PI) / 180;
 
         // ---------------- Generazione PUNTI base ----------------
         function makeBasePoints(R) {
@@ -281,32 +288,34 @@
         const centers = useMemo(() => {
           const pts0 = basePoints.map((p) => ({ ...p }));
 
-          const sx = 1 - clamp(pullX, 0, 1);
-          const sy = 1 - clamp(pullY, 0, 1);
+          // Nuova mappatura simmetria con slider centrati:
+          // fattori di scala lungo X/Y: sx, sy (clampati 0.2..2.0)
+          const sx = clamp(1 - pullX, 0.2, 2.0);
+          const sy = clamp(1 - pullY, 0.2, 2.0);
 
-          const mirX = (p) => ({ x: 2 * (W/2) - p.x, y: p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
-          const mirY = (p) => ({ x: p.x, y: 2 * (H/2) - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
-          const rot180 = (p) => ({ x: 2 * (W/2) - p.x, y: 2 * (H/2) - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+          const mirX = (p) => ({ x: 2 * cx - p.x, y: p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+          const mirY = (p) => ({ x: p.x, y: 2 * cy - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
+          const rot180 = (p) => ({ x: 2 * cx - p.x, y: 2 * cy - p.y, s: p.s, w: p.w, id: p.id, dens: p.dens, cos: p.cos, sin: p.sin });
 
           const angleForBase = (p) => {
             switch (orient) {
               case "x": return 0;
               case "y": return Math.PI / 2;
               case "fixed": return toRad(fixedAngle);
-              case "radial": return Math.atan2(p.y - (H/2), p.x - (W/2));
-              case "tangential": return Math.atan2(p.y - (H/2), p.x - (W/2)) + Math.PI / 2;
+              case "radial": return Math.atan2(p.y - cy, p.x - cx);
+              case "tangential": return Math.atan2(p.y - cy, p.x - cx) + Math.PI / 2;
               default: return hash01(seed, p.id) * Math.PI * 2;
             }
           };
 
-          // 1) pull
+          // 1) pull (centrato sul centro geometrico)
           let prim =
             symmetry === "quad" || symmetry === "central"
-              ? pts0.map((p)=>({ ...p, x: (W/2) + (p.x - (W/2)) * sx, y: (H/2) + (p.y - (H/2)) * sy }))
+              ? pts0.map((p)=>({ ...p, x: cx + (p.x - cx) * sx, y: cy + (p.y - cy) * sy }))
               : symmetry === "mirrorX"
-              ? pts0.map((p) => ({ ...p, x: (W/2) + (p.x - (W/2)) * sx }))
+              ? pts0.map((p) => ({ ...p, x: cx + (p.x - cx) * sx }))
               : symmetry === "mirrorY"
-              ? pts0.map((p) => ({ ...p, y: (H/2) + (p.y - (H/2)) * sy }))
+              ? pts0.map((p) => ({ ...p, y: cy + (p.y - cy) * sy }))
               : pts0.slice();
 
           // 2) orientazione (sempre PRIMA della simmetria)
@@ -380,7 +389,7 @@
             p.s = clamp(p.s * scale, sMin, sMax);
           }
           return pts;
-        }, [basePoints, symmetry, pullX, pullY, orient, fixedAngle, branchiness, sigmaMin, sigmaMax, seed, W, H]);
+        }, [basePoints, symmetry, pullX, pullY, orient, fixedAngle, branchiness, sigmaMin, sigmaMax, seed, W, H, cx, cy]);
 
         // ---------------- Campo con anisotropia ----------------
         function fieldAtWorld(x, y) {
@@ -413,8 +422,8 @@
 
         // fieldAt su coordinate SCHERMO (applica zoom sul contenuto attorno a cx, cy)
         function fieldAtScreen(x, y) {
-          const wx = (W/2) + (x - (W/2)) / zoomContent;
-          const wy = (H/2) + (y - (H/2)) / zoomContent;
+          const wx = cx + (x - cx) / zoomContent;
+          const wy = cy + (y - cy) / zoomContent;
           return fieldAtWorld(wx, wy);
         }
 
@@ -487,9 +496,10 @@
           if (showCenters) {
             ctx.save();
             ctx.scale(sx, sy);
-            ctx.translate(W/2, H/2);
+            // zoom intorno al centro logico
+            ctx.translate(cx, cy);
             ctx.scale(zoomContent, zoomContent);
-            ctx.translate(-W/2, -H/2);
+            ctx.translate(-cx, -cy);
 
             ctx.strokeStyle = "#0009";
             ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
@@ -502,6 +512,7 @@
               else ctx.arc(c.x, c.y, sMin, 0, Math.PI * 2);
               ctx.stroke();
             }
+            // croci
             ctx.setLineDash([]);
             ctx.strokeStyle = "#000";
             ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
@@ -518,7 +529,6 @@
         }, [viewW, viewH, dpr, centers, kernel, alpha, gridStep, threshold, aniso, mode, W, H, zoomContent]);
 
         // ---------------- Render su CANVAS target (per export) ----------------
-        // includeFill: se true disegna i riempimenti; includeCenters: se true disegna anche i centri
         function renderToCanvas(targetCanvas, scale, includeFill, includeCenters) {
           const CW = Math.max(2, Math.floor(W * scale));
           const CH = Math.max(2, Math.floor(H * scale));
@@ -562,11 +572,13 @@
           if (includeCenters) {
             // overlay centers in alta risoluzione
             ctx.save();
+            // scala al canvas finale
             const sx = CW / W, sy = CH / H;
             ctx.scale(sx, sy);
-            ctx.translate(W/2, H/2);
+            // zoom intorno al centro logico
+            ctx.translate(cx, cy);
             ctx.scale(zoomContent, zoomContent);
-            ctx.translate(-W/2, -H/2);
+            ctx.translate(-cx, -cy);
 
             ctx.strokeStyle = "#0009";
             ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
@@ -579,6 +591,7 @@
               else ctx.arc(c.x, c.y, sMin, 0, Math.PI * 2);
               ctx.stroke();
             }
+            // croci
             ctx.setLineDash([]);
             ctx.strokeStyle = "#000";
             ctx.lineWidth = 1.25 / (Math.max(sx, sy) * zoomContent);
@@ -594,19 +607,13 @@
           }
         }
 
-        // ---------------- EXPORT PNG (rispetta il mode) ----------------
+        // ---------------- PNG EXPORT (rispetta il mode) ----------------
         function exportPNG() {
-          // Selezione in base alla modalità
           const includeFill = (mode !== "centers");
           const includeCenters = (mode !== "fill");
-
           const scale = exportScale; // DPI / 96
           const tmp = document.createElement("canvas");
-
-          // Render “full-res” sul canvas off-screen
           renderToCanvas(tmp, scale, includeFill, includeCenters);
-
-          // Salva
           if (tmp.toBlob) {
             tmp.toBlob((blob) => {
               if (!blob) {
@@ -637,11 +644,225 @@
           }
         }
 
+
+        // PNG EXPORT — solo riempimenti (ignora la modalità corrente)
+        function exportPNGFillOnly() {
+          const scale = exportScale; // DPI / 96
+          const tmp = document.createElement("canvas");
+          renderToCanvas(tmp, scale, /*includeFill*/true, /*includeCenters*/false);
+          const fname = `metaballs_${seed}_${exportDPI}dpi_fill.png`;
+          if (tmp.toBlob) {
+            tmp.toBlob((blob) => {
+              if (!blob) {
+                const a = document.createElement("a");
+                a.href = tmp.toDataURL("image/png");
+                a.download = fname;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                return;
+              }
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = fname;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+              URL.revokeObjectURL(url);
+            }, "image/png");
+          } else {
+            const a = document.createElement("a");
+            a.href = tmp.toDataURL("image/png");
+            a.download = fname;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+          }
+        }
+
+        // ---------------- SVG EXPORT ----------------
+        // Variante 1: Solo centri (tutto vettoriale)
+        // Variante 2: Riempimenti come raster + centri vettoriali
+        function exportSVG(withRasterFill) {
+          const includeFill = withRasterFill && (mode !== "centers");
+          const includeCenters = (mode !== "fill");
+          const scale = exportScale;
+          const CW = Math.max(2, Math.floor(W * scale));
+          const CH = Math.max(2, Math.floor(H * scale));
+
+          let dataURL = null;
+          if (includeFill) {
+            // Render bitmap e incorporala come <image> base64 PNG
+            const tmp = document.createElement("canvas");
+            renderToCanvas(tmp, scale, /*includeFill*/true, /*includeCenters*/false);
+            dataURL = tmp.toDataURL("image/png");
+          }
+
+          // Costruisci SVG
+          const svgParts = [];
+          svgParts.push(`<?xml version="1.0" encoding="UTF-8"?>`);
+          svgParts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${CW}" height="${CH}" viewBox="0 0 ${W} ${H}">`);
+          svgParts.push(`<rect width="100%" height="100%" fill="white"/>`);
+
+          if (includeFill && dataURL) {
+            // Incolla raster alla dimensione LOGICA, lo scaling viene dal viewBox
+            svgParts.push(`<image href="${dataURL}" x="0" y="0" width="${W}" height="${H}" />`);
+          }
+
+          if (includeCenters) {
+            // gruppo con zoom del contenuto
+            svgParts.push(`<g transform="translate(${cx},${cy}) scale(${zoomContent}) translate(${-cx},${-cy})">`);
+            // ellissi (anisotrope) + croci
+            const strokeCenters = "#0009";
+            const strokeCross = "#000";
+            const lw = 1.25 / zoomContent; // approx
+            for (const c of centers) {
+              const sMaj = (c.s || 1) * Math.max(1, aniso);
+              const sMin = c.s || 1;
+              const ang = Math.atan2(c.sin || 0, c.cos || 1);
+              svgParts.push(`<g transform="translate(${c.x},${c.y}) rotate(${(ang*180/Math.PI).toFixed(3)})">`);
+              // ellipse
+              svgParts.push(`<ellipse cx="0" cy="0" rx="${sMaj.toFixed(3)}" ry="${sMin.toFixed(3)}" fill="none" stroke="${strokeCenters}" stroke-width="${lw.toFixed(3)}"/>`);
+              // cross
+              svgParts.push(`<path d="M -6 0 L 6 0 M 0 -6 L 0 6" stroke="${strokeCross}" stroke-width="${lw.toFixed(3)}" fill="none" />`);
+              svgParts.push(`</g>`);
+            }
+            svgParts.push(`</g>`);
+          }
+
+          svgParts.push(`</svg>`);
+          const svgText = svgParts.join("\n");
+          const blob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `metaballs_${seed}_${exportDPI}dpi${withRasterFill ? "_rasterfill" : "_centers"}.svg`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(()=> URL.revokeObjectURL(a.href), 0);
+        }
+
+        // ---------------- PRESET: serialize / apply / save / load ----------------
+        const PRESET_VERSION = 1;
+        function serializePreset() {
+          return {
+            _kind: "organic-party-blob",
+            _ver: PRESET_VERSION,
+            ts: new Date().toISOString(),
+            // canvas / layout
+            logicWidth, aspect, zoomContent, keepInside,
+            // rng
+            seed,
+            // simmetria e deformazioni
+            symmetry, pullX, pullY,
+            // distribuzione
+            dist, nBase, spacing, kClusters, spread,
+            // kernel / raggio
+            sigmaMin, sigmaMax, kernel, alpha,
+            // rendering
+            fusion, gridStep, quality, mode,
+            // aniso
+            aniso, orient, fixedAngle,
+            // branchiness
+            branchiness,
+            // export
+            exportDPI
+          };
+        }
+        function applyPreset(p) {
+          if (!p || typeof p !== "object") return;
+          if (p.logicWidth != null) setLogicWidth(+p.logicWidth);
+          if (p.aspect) setAspect(p.aspect);
+          if (p.zoomContent != null) setZoomContent(+p.zoomContent);
+          if (p.keepInside != null) setKeepInside(!!p.keepInside);
+
+          if (p.seed != null) setSeed(+p.seed);
+
+          if (p.symmetry) setSymmetry(p.symmetry);
+          if (p.pullX != null) setPullX(+p.pullX);
+          if (p.pullY != null) setPullY(+p.pullY);
+
+          if (p.dist) setDist(p.dist);
+          if (p.nBase != null) setNBase(+p.nBase);
+          if (p.spacing != null) setSpacing(+p.spacing);
+          if (p.kClusters != null) setKClusters(+p.kClusters);
+          if (p.spread != null) setSpread(+p.spread);
+
+          if (p.sigmaMin != null) setSigmaMin(+p.sigmaMin);
+          if (p.sigmaMax != null) setSigmaMax(+p.sigmaMax);
+          if (p.kernel) setKernel(p.kernel);
+          if (p.alpha != null) setAlpha(+p.alpha);
+
+          if (p.fusion != null) setFusion(+p.fusion);
+          if (p.gridStep != null) setGridStep(+p.gridStep);
+          if (p.quality) setQuality(p.quality);
+          if (p.mode) setMode(p.mode);
+
+          if (p.aniso != null) setAniso(+p.aniso);
+          if (p.orient) setOrient(p.orient);
+          if (p.fixedAngle != null) setFixedAngle(+p.fixedAngle);
+
+          if (p.branchiness != null) setBranchiness(+p.branchiness);
+
+          if (p.exportDPI != null) setExportDPI(+p.exportDPI);
+        }
+        function downloadPreset() {
+          const preset = serializePreset();
+          const blob = new Blob([JSON.stringify(preset, null, 2)], { type: "application/json" });
+          const a = document.createElement("a");
+          const fname = `blob_preset_seed${seed}_${exportDPI}dpi.json`;
+          a.href = URL.createObjectURL(blob);
+          a.download = fname;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(()=> URL.revokeObjectURL(a.href), 0);
+        }
+        const fileInputRef = useRef(null);
+        function openPresetDialog() { fileInputRef.current?.click(); }
+        function onPresetFileChange(e) {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = () => {
+            try {
+              const json = JSON.parse(reader.result);
+              applyPreset(json);
+            } catch (err) {
+              alert("Preset non valido: " + err.message);
+            }
+          };
+          reader.readAsText(file);
+          e.target.value = "";
+        }
+        async function copyPresetToClipboard() {
+          try {
+            const txt = JSON.stringify(serializePreset());
+            await navigator.clipboard.writeText(txt);
+            alert("Preset copiato negli appunti.");
+          } catch (e) {
+            alert("Copia fallita: " + e.message);
+          }
+        }
+        async function pastePresetFromClipboard() {
+          try {
+            const txt = await navigator.clipboard.readText();
+            const json = JSON.parse(txt);
+            applyPreset(json);
+          } catch (e) {
+            alert("Incolla preset fallita: " + e.message);
+          }
+        }
+
+        // ---------------- LABEL UI ----------------
+        const modeLabel = mode === "fill" ? "Riempimenti" : mode === "centers" ? "Solo centri" : "Riemp.+Centri";
+
         // self-test
         useEffect(() => {
           try {
             if (!(centers.length > 0)) throw new Error("No centers generated");
-            const mid = fieldAtWorld(W/2, H/2);
+            const mid = fieldAtWorld(cx, cy);
             if (!Number.isFinite(mid)) throw new Error("Field not finite");
             console.debug("[SelfTest] OK – centers:", centers.length, ", field(cx,cy):", mid.toFixed(4));
           } catch (e) {
@@ -675,10 +896,24 @@
 
               <div className="flexrow">
                 <button style={{flex:1}} onClick={()=> (locked ? setRegenTick(t=>t+1) : setSeed(s=>s+1))}>Genera</button>
-                <button onClick={exportPNG}>Salva PNG</button>
               </div>
 
-              <div className="two">
+              <div className="exportbar">
+                <button className="small" onClick={exportPNG}>Salva PNG ({modeLabel})</button>
+                <button className="small" onClick={exportPNGFillOnly}>Salva PNG (solo riempimenti)</button>
+                <button className="small" onClick={()=>exportSVG(false)}>Salva SVG (centri vettoriali)</button>
+                <button className="small" onClick={()=>exportSVG(true)}>Salva SVG (riempimenti raster + centri)</button>
+              </div>
+
+              <div className="toolbar">
+                <button className="small" onClick={downloadPreset}>Salva preset</button>
+                <button className="small" onClick={openPresetDialog}>Carica preset</button>
+                <button className="small" onClick={copyPresetToClipboard}>Copia preset</button>
+                <button className="small" onClick={pastePresetFromClipboard}>Incolla preset</button>
+              </div>
+              <input ref={fileInputRef} type="file" accept="application/json,.json" style={{display:"none"}} onChange={onPresetFileChange} />
+
+              <div className="two" style={{marginTop: 8}}>
                 <div>
                   <label>Qualità anteprima</label>
                   <select value={quality} onChange={(e)=>setQuality(e.target.value)}>
@@ -747,15 +982,17 @@
 
               { (symmetry === "mirrorX" || symmetry === "quad" || symmetry === "central") && (
                 <div>
-                  <label>Distanza simm. X: {pullX.toFixed(2)}</label>
-                  <input type="range" min="0" max="1" step="0.01" value={pullX} onChange={(e)=>setPullX(parseFloat(e.target.value))} />
+                  <label>Distanza simm. X (centrale=0): {pullX.toFixed(2)}</label>
+                  <input type="range" min="-1" max="1" step="0.01" value={pullX} onChange={(e)=>setPullX(parseFloat(e.target.value))} />
+                  <div className="help">Valori &lt; 0 allontanano, &gt; 0 avvicinano al centro.</div>
                 </div>
               )}
 
               { (symmetry === "mirrorY" || symmetry === "quad" || symmetry === "central") && (
                 <div>
-                  <label>Distanza simm. Y: {pullY.toFixed(2)}</label>
-                  <input type="range" min="0" max="1" step="0.01" value={pullY} onChange={(e)=>setPullY(parseFloat(e.target.value))} />
+                  <label>Distanza simm. Y (centrale=0): {pullY.toFixed(2)}</label>
+                  <input type="range" min="-1" max="1" step="0.01" value={pullY} onChange={(e)=>setPullY(parseFloat(e.target.value))} />
+                  <div className="help">Valori &lt; 0 allontanano, &gt; 0 avvicinano al centro.</div>
                 </div>
               )}
 
